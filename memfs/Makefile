@@ -2,11 +2,18 @@ CC = gcc
 CFLAGS = `pkg-config fuse3 --cflags` -Wall -g
 LDFLAGS = `pkg-config fuse3 --libs` -lssl -lcrypto
 
+SOURCES = main.c node.c encryption.c operations.c
+OBJECTS = $(SOURCES:.c=.o)
+HEADERS = memfs.h node.h encryption.h operations.h
+
 all: memfs
 
-memfs: memfs.c generate_random_key.c generate_random_key.h
-	$(CC) $(CFLAGS) memfs.c generate_random_key.c -o memfs $(LDFLAGS)
+memfs: $(OBJECTS)
+	$(CC) $(CFLAGS) -o memfs $(OBJECTS) $(LDFLAGS)
+
+%.o: %.c $(HEADERS)
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f memfs
+	rm -f memfs $(OBJECTS)
 

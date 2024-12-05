@@ -1,256 +1,14 @@
-#define FUSE_USE_VERSION 31
-
-#include <unistd.h>
-#include <fuse3/fuse.h>
-#include <stdio.h>
+#include "operations.h"
+#include "node.h"
+#include "encryption.h"
 #include <string.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <time.h>
+#include <stdio.h>
 #include <stdlib.h>
-
-
-// 添加 OpenSSL 头文件
-#include <openssl/conf.h>
-#include <openssl/evp.h>
-#include <openssl/err.h>
-#include <openssl/rand.h>
-
-
-// include header file
-#include "generate_random_key.h"
-
-
-// 定义 AES-256 密钥和 IV 大小
-#define AES_KEY_SIZE 32 // 256 bits
-#define AES_BLOCK_SIZE 16 // 128 bits
-
-// 定义文件或目录的类型
-typedef enum {
-    NODE_FILE,
-    NODE_DIR
-} node_type;
-
-// 定义文件节点结构
-typedef struct memfs_node {
-    char *name;
-    node_type type;
-    mode_t mode;
-    uid_t uid;
-    gid_t gid;
-    time_t atime;
-    time_t mtime;
-    time_t ctime;
-    size_t size;            // 加密后的数据大小
-    size_t plaintext_size;  // 明文数据大小
-    char *data;             // 存储加密后的数据
-    unsigned char aes_key[AES_KEY_SIZE];  // 文件的 AES 密钥
-    unsigned char aes_iv[AES_BLOCK_SIZE]; // 文件的 AES IV
-
-    struct memfs_node *parent;
-    struct memfs_node *children;
-    struct memfs_node *next;
-} memfs_node;
-
-// 根目录节点
-memfs_node *root;
-
-// 初始化 OpenSSL 库（可选）
-//void init_openssl() {
-    /* 初始化 OpenSSL 算法库 */
-//    ERR_load_crypto_strings();
-//    OpenSSL_add_all_algorithms();
-//    OPENSSL_config(NULL);
-//}
-
-// 清理 OpenSSL 库（可选）
-//void cleanup_openssl() {
-    /* 清理 OpenSSL 算法库 */
-//    EVP_cleanup();
-//    ERR_free_strings();
-//}
-
-// 生成随机密钥和 IV
-/*
-void generate_random_key(unsigned char *key, unsigned char *iv) {
-    if (!RAND_bytes(key, AES_KEY_SIZE)) {
-        perror("Error generating random AES key");
-        exit(EXIT_FAILURE);
-    }
-    if (!RAND_bytes(iv, AES_BLOCK_SIZE)) {
-        perror("Error generating random AES IV");
-        exit(EXIT_FAILURE);
-    }
-}
-*/
-
-// 辅助函数：创建新节点
-memfs_node *create_node(const char *name, node_type type, mode_t mode, memfs_node *parent) {
-    memfs_node *node = (memfs_node *)malloc(sizeof(memfs_node));
-    node->name = strdup(name);
-    node->type = type;
-    node->mode = mode;
-    node->uid = getuid();
-    node->gid = getgid();
-    node->atime = node->mtime = node->ctime = time(NULL);
-    node->size = 0;
-    node->plaintext_size = 0;
-    node->data = NULL;
-    node->parent = parent;
-    node->children = NULL;
-    node->next = NULL;
-
-    if (type == NODE_FILE) {
-        // 为新文件生成随机密钥和 IV
-        generate_random_key(node->aes_key, node->aes_iv);
-
-        printf("Generated AES Key for %s: ", name);
-        for (int i = 0; i < AES_KEY_SIZE; i++) {
-            printf("%02x", node->aes_key[i]);
-        }
-        printf("\n");
-
-        printf("Generated AES IV for %s: ", name);
-        for (int i = 0; i < AES_BLOCK_SIZE; i++) {
-            printf("%02x", node->aes_iv[i]);
-        }
-        printf("\n");
-    }
-
-    return node;
-}
-
-// 查找节点的函数
-memfs_node *find_node(const char *path) {
-    if (strcmp(path, "/") == 0) {
-        return root;
-    }
-
-    char *path_dup = strdup(path);
-    char *token;
-    char *saveptr;
-    memfs_node *current = root;
-
-    // split the path by "/"
-    token = strtok_r(path_dup, "/", &saveptr);
-    while (token != NULL) {
-        memfs_node *temp = current->children;
-        while (temp != NULL) {
-            if (strcmp(temp->name, token) == 0) {
-                break;
-            }
-            temp = temp->next;
-        }
-        if (temp == NULL) {
-            free(path_dup);
-            return NULL;
-        }
-        current = temp;
-        token = strtok_r(NULL, "/", &saveptr);
-    }
-
-    free(path_dup);
-    return current;
-}
-
-// 加密函数
-int encrypt_data(const unsigned char *plaintext, int plaintext_len,
-                 unsigned char *key, unsigned char *iv,
-                 unsigned char **ciphertext) {
-    EVP_CIPHER_CTX *ctx;
-    int len;
-    int ciphertext_len;
-
-    *ciphertext = malloc(plaintext_len + AES_BLOCK_SIZE);
-    if (*ciphertext == NULL) {
-        return -1;
-    }
-
-    /* 创建和初始化上下文 */
-    if (!(ctx = EVP_CIPHER_CTX_new())) {
-        free(*ciphertext);
-        return -1;
-    }
-
-    /* 初始化加密操作 */
-    if (1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv)) {
-        free(*ciphertext);
-        EVP_CIPHER_CTX_free(ctx);
-        return -1;
-    }
-
-    /* 加密数据 */
-    if (1 != EVP_EncryptUpdate(ctx, *ciphertext, &len, plaintext, plaintext_len)) {
-        free(*ciphertext);
-        EVP_CIPHER_CTX_free(ctx);
-        return -1;
-    }
-    ciphertext_len = len;
-
-    /* 结束加密 */
-    if (1 != EVP_EncryptFinal_ex(ctx, *ciphertext + len, &len)) {
-        free(*ciphertext);
-        EVP_CIPHER_CTX_free(ctx);
-        return -1;
-    }
-    ciphertext_len += len;
-
-    /* 清理 */
-    EVP_CIPHER_CTX_free(ctx);
-
-    return ciphertext_len;
-}
-
-// 解密函数
-int decrypt_data(const unsigned char *ciphertext, int ciphertext_len,
-                 unsigned char *key, unsigned char *iv,
-                 unsigned char **plaintext) {
-    EVP_CIPHER_CTX *ctx;
-    int len;
-    int plaintext_len;
-
-    *plaintext = malloc(ciphertext_len);
-    if (*plaintext == NULL) {
-        return -1;
-    }
-
-    /* 创建和初始化上下文 */
-    if (!(ctx = EVP_CIPHER_CTX_new())) {
-        free(*plaintext);
-        return -1;
-    }
-
-    /* 初始化解密操作 */
-    if (1 != EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key, iv)) {
-        free(*plaintext);
-        EVP_CIPHER_CTX_free(ctx);
-        return -1;
-    }
-
-    /* 解密数据 */
-    if (1 != EVP_DecryptUpdate(ctx, *plaintext, &len, ciphertext, ciphertext_len)) {
-        free(*plaintext);
-        EVP_CIPHER_CTX_free(ctx);
-        return -1;
-    }
-    plaintext_len = len;
-
-    /* 结束解密 */
-    if (1 != EVP_DecryptFinal_ex(ctx, *plaintext + len, &len)) {
-        free(*plaintext);
-        EVP_CIPHER_CTX_free(ctx);
-        return -1;
-    }
-    plaintext_len += len;
-
-    /* 清理 */
-    EVP_CIPHER_CTX_free(ctx);
-
-    return plaintext_len;
-}
+#include <errno.h>
+#include <time.h>
 
 // 实现 getattr 回调函数
-static int memfs_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) {
+int memfs_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi) {
     (void) fi;
     memset(stbuf, 0, sizeof(struct stat));
 
@@ -279,9 +37,9 @@ static int memfs_getattr(const char *path, struct stat *stbuf, struct fuse_file_
 }
 
 // 实现 readdir 回调函数
-static int memfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
-                         off_t offset, struct fuse_file_info *fi,
-                         enum fuse_readdir_flags flags) {
+int memfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+                  off_t offset, struct fuse_file_info *fi,
+                  enum fuse_readdir_flags flags) {
     (void) offset;
     (void) fi;
     (void) flags;
@@ -304,7 +62,7 @@ static int memfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 }
 
 // 实现 mkdir 回调函数
-static int memfs_mkdir(const char *path, mode_t mode) {
+int memfs_mkdir(const char *path, mode_t mode) {
     printf("mkdir called for path: %s\n", path);
     char *dup_path = strdup(path);
     char *dir_name = strrchr(dup_path, '/');
@@ -341,9 +99,8 @@ static int memfs_mkdir(const char *path, mode_t mode) {
     return 0;
 }
 
-
 // 实现 create 回调函数
-static int memfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+int memfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
     (void) fi;
     printf("create called for path: %s\n", path);
     char *dup_path = strdup(path);
@@ -382,9 +139,8 @@ static int memfs_create(const char *path, mode_t mode, struct fuse_file_info *fi
     return 0;
 }
 
-
 // 实现 mknod 回调函数
-static int memfs_mknod(const char *path, mode_t mode, dev_t rdev) {
+int memfs_mknod(const char *path, mode_t mode, dev_t rdev) {
     printf("mknod called for path: %s\n", path);
 
     if (S_ISREG(mode)) {
@@ -400,10 +156,8 @@ static int memfs_mknod(const char *path, mode_t mode, dev_t rdev) {
     }
 }
 
-
-
 // 实现 open 回调函数
-static int memfs_open(const char *path, struct fuse_file_info *fi) {
+int memfs_open(const char *path, struct fuse_file_info *fi) {
     printf("open called for path: %s\n", path);
     memfs_node *node = find_node(path);
     if (node == NULL) {
@@ -417,48 +171,12 @@ static int memfs_open(const char *path, struct fuse_file_info *fi) {
     return 0;
 }
 
-/*
-// using wrong key to read file, can't acces!!
+// 实现 read 回调函数
 int memfs_read(const char *path, char *buf, size_t size, off_t offset,
                struct fuse_file_info *fi) {
-    memfs_node *node = find_node(path);
-    unsigned char *decrypted_data = NULL;
-
-    // 定義錯誤的 AES 金鑰（與正確金鑰不同）
-    unsigned char wrong_key[AES_KEY_SIZE] = "wrongkey12345678901234567890abcd";
-
-    // 使用錯誤的金鑰進行解密
-    int decrypted_size = decrypt_data((unsigned char *)node->data, node->size,
-                                      wrong_key, node->aes_iv, &decrypted_data);
-
-    // 檢查解密是否成功
-    if (decrypted_size < 0) {
-        printf("Decryption failed with wrong key!\n");
-        return -EIO;  // 返回錯誤，表示解密失敗
-    }
-
-    if (offset >= decrypted_size) {
-        free(decrypted_data);
-        return 0;
-    }
-    if (offset + size > decrypted_size) {
-        size = decrypted_size - offset;
-    }
-    memcpy(buf, decrypted_data + offset, size);
-    free(decrypted_data);
-    return size;
-}
-*/
-
-
-
-// 实现 read 回调函数（添加解密操作）
-static int memfs_read(const char *path, char *buf, size_t size, off_t offset,
-                      struct fuse_file_info *fi) {
     (void) fi;
     printf("read called for path: %s, size: %zu, offset: %ld\n", path, size, offset);
-    
-    
+
     memfs_node *node = find_node(path);
     if (node == NULL) {
         printf("read: node not found\n");
@@ -472,8 +190,6 @@ static int memfs_read(const char *path, char *buf, size_t size, off_t offset,
     if (node->data == NULL || node->size == 0) {
         return 0;
     }
-
-
 
     // 解密数据
     unsigned char *decrypted_data = NULL;
@@ -497,11 +213,9 @@ static int memfs_read(const char *path, char *buf, size_t size, off_t offset,
     return size;
 }
 
-
-
-// 实现 write 回调函数（添加加密操作）
-static int memfs_write(const char *path, const char *buf, size_t size, off_t offset,
-                       struct fuse_file_info *fi) {
+// 实现 write 回调函数
+int memfs_write(const char *path, const char *buf, size_t size, off_t offset,
+                struct fuse_file_info *fi) {
     printf("write called for path: %s, size: %zu, offset: %ld\n", path, size, offset);
 
     memfs_node *node = find_node(path);
@@ -572,10 +286,8 @@ static int memfs_write(const char *path, const char *buf, size_t size, off_t off
     return size;
 }
 
-
-
 // 实现 truncate 回调函数
-static int memfs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
+int memfs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
     (void) fi;
     printf("truncate called for path: %s, size: %ld\n", path, size);
 
@@ -644,8 +356,8 @@ static int memfs_truncate(const char *path, off_t size, struct fuse_file_info *f
     return 0;
 }
 
-// 实现 unlink 回调函数（删除文件）
-static int memfs_unlink(const char *path) {
+// 实现 unlink 回调函数
+int memfs_unlink(const char *path) {
     printf("unlink called for path: %s\n", path);
     char *dup_path = strdup(path);
     char *file_name = strrchr(dup_path, '/');
@@ -688,8 +400,8 @@ static int memfs_unlink(const char *path) {
     return -ENOENT;
 }
 
-// 实现 rmdir 回调函数（删除目录）
-static int memfs_rmdir(const char *path) {
+// 实现 rmdir 回调函数
+int memfs_rmdir(const char *path) {
     printf("rmdir called for path: %s\n", path);
     char *dup_path = strdup(path);
     char *dir_name = strrchr(dup_path, '/');
@@ -736,8 +448,8 @@ static int memfs_rmdir(const char *path) {
 }
 
 // 实现 utimens 回调函数
-static int memfs_utimens(const char *path, const struct timespec tv[2],
-                         struct fuse_file_info *fi) {
+int memfs_utimens(const char *path, const struct timespec tv[2],
+                  struct fuse_file_info *fi) {
     (void) fi;
     printf("utimens called for path: %s\n", path);
 
@@ -771,7 +483,7 @@ static int memfs_utimens(const char *path, const struct timespec tv[2],
 }
 
 // 实现 chmod 回调函数
-static int memfs_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
+int memfs_chmod(const char *path, mode_t mode, struct fuse_file_info *fi) {
     (void) fi;
     printf("chmod called for path: %s, mode: %o\n", path, mode);
 
@@ -789,14 +501,14 @@ static int memfs_chmod(const char *path, mode_t mode, struct fuse_file_info *fi)
     return 0;
 }
 
-// 实现 release 回调函数（关闭文件）
-static int memfs_release(const char *path, struct fuse_file_info *fi) {
+// 实现 release 回调函数
+int memfs_release(const char *path, struct fuse_file_info *fi) {
     printf("release called for path: %s\n", path);
     return 0;
 }
 
 // 定义 FUSE 操作结构体
-static struct fuse_operations memfs_oper = {
+struct fuse_operations memfs_oper = {
     .getattr  = memfs_getattr,
     .readdir  = memfs_readdir,
     .mkdir    = memfs_mkdir,
@@ -812,21 +524,4 @@ static struct fuse_operations memfs_oper = {
     .chmod    = memfs_chmod,
     .release  = memfs_release,
 };
-
-// 主函数
-int main(int argc, char *argv[]) {
-    // 初始化 OpenSSL（可选）
-    //init_openssl();
-
-    // 初始化根目录
-    root = create_node("/", NODE_DIR, 0755, NULL);
-
-    // 启动 FUSE 文件系统
-    int ret = fuse_main(argc, argv, &memfs_oper, NULL);
-
-    // 清理 OpenSSL（可选）
-    //cleanup_openssl();
-
-    return ret;
-}
 
