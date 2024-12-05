@@ -1,4 +1,5 @@
 #define FUSE_USE_VERSION 31
+
 #include <unistd.h>
 #include <fuse3/fuse.h>
 #include <stdio.h>
@@ -8,11 +9,17 @@
 #include <time.h>
 #include <stdlib.h>
 
+
 // 添加 OpenSSL 头文件
 #include <openssl/conf.h>
 #include <openssl/evp.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
+
+
+// include header file
+#include "generate_random_key.h"
+
 
 // 定义 AES-256 密钥和 IV 大小
 #define AES_KEY_SIZE 32 // 256 bits
@@ -64,6 +71,7 @@ memfs_node *root;
 //}
 
 // 生成随机密钥和 IV
+/*
 void generate_random_key(unsigned char *key, unsigned char *iv) {
     if (!RAND_bytes(key, AES_KEY_SIZE)) {
         perror("Error generating random AES key");
@@ -74,6 +82,7 @@ void generate_random_key(unsigned char *key, unsigned char *iv) {
         exit(EXIT_FAILURE);
     }
 }
+*/
 
 // 辅助函数：创建新节点
 memfs_node *create_node(const char *name, node_type type, mode_t mode, memfs_node *parent) {
@@ -122,8 +131,8 @@ memfs_node *find_node(const char *path) {
     char *saveptr;
     memfs_node *current = root;
 
+    // split the path by "/"
     token = strtok_r(path_dup, "/", &saveptr);
-
     while (token != NULL) {
         memfs_node *temp = current->children;
         while (temp != NULL) {
