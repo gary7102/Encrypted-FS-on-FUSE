@@ -1,0 +1,2 @@
+# ignore memfs/memfs, because this is FUSE
+memfs/memfs
