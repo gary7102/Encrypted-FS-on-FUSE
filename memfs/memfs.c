@@ -409,6 +409,7 @@ static int memfs_open(const char *path, struct fuse_file_info *fi) {
 }
 
 /*
+// using wrong key to read file, can't acces!!
 int memfs_read(const char *path, char *buf, size_t size, off_t offset,
                struct fuse_file_info *fi) {
     memfs_node *node = find_node(path);
