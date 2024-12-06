@@ -191,7 +191,17 @@ int memfs_read(const char *path, char *buf, size_t size, off_t offset,
         return 0;
     }
 
-    // 解密数据
+    /*
+    // 定義錯誤的 AES 金鑰（與正確金鑰不同）
+    unsigned char wrong_key[AES_KEY_SIZE] = "wrongkey12345678901234567890abcd";
+    
+    // using wrong AES KEY to decrypted.
+    unsigned char *decrypted_data = NULL;
+    int decrypted_size = decrypt_data((unsigned char *)node->data, node->size,
+                                      node->aes_key, node->aes_iv, &decrypted_data);
+     */
+
+    // using correct AES KEY to decrypted.
     unsigned char *decrypted_data = NULL;
     int decrypted_size = decrypt_data((unsigned char *)node->data, node->size,
                                       node->aes_key, node->aes_iv, &decrypted_data);
