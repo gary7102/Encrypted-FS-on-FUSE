@@ -299,7 +299,7 @@ touch testfile_3
 
 測試: 若給予錯誤的AES key，是否能解密資料
 
-:::spoiler 更改`memfs_read()` 為:
+更改`memfs_read()` 為:
 ```c
 // Use wrong key to decrypted data
 int memfs_read(const char *path, char *buf, size_t size, off_t offset,
@@ -318,7 +318,7 @@ int memfs_read(const char *path, char *buf, size_t size, off_t offset,
     // ...
 
 ```
-:::
+
 
 這個`memfs_read()`內預設了錯誤的AES key，在讀取時會使用到錯誤的key，  
 並且`return -EIO`，所以在command line 會看到 Input/output error
