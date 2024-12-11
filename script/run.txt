@@ -1,0 +1,21 @@
+# mount the FUSE to directory: /tmp/memfs, also using gdb to set breakpoint
+gdb --args ./memfs -f -d /tmp/memfs
+
+
+# set the breakpoint to check if data is correctly encrypted and decrypted
+break operations.c:220 (before memfs_read() end )
+break operations.c:296 (before memfs_write() end )
+
+
+# continue running.
+run
+
+#####################################################
+
+# when meet up the breakpoint, if you want to continueing  running, type:
+continue
+
+#####################################################
+
+# after fusermount, if you want to ending gdb, type:
+exit
